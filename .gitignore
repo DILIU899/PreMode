@@ -1,0 +1,21 @@
+# ignore all log files
+log/**
+
+# ignore all input data files (it's too big, so need to download from huggingface)
+data.files
+data.files/**
+parse_input_table/swissprot_and_human.full.seq.csv
+
+# ignore all result files
+res/**
+
+# ignore experiment model config files
+scripts/**
+!scripts/example/
+!scripts/example/**
+!scripts/*.sh
+
+# ignore __pycache__
+**/__pycache__
+**/.vscode
+
