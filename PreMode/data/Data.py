@@ -1,5 +1,6 @@
 from typing import Literal
 import warnings
+import logging
 import time
 import numpy as np
 import pandas as pd
@@ -20,6 +21,10 @@ import pickle
 from datetime import datetime
 import os
 NUM_THREADS = 42
+
+logging.basicConfig()
+logger = logging.getLogger(__file__)
+logger.setLevel(level=logging.INFO)
 
 # Main Abstract Class, define a Mutation Dataset, compatible with PyTorch Geometric
 class GraphMutationDataset(Dataset):
@@ -63,6 +68,7 @@ class GraphMutationDataset(Dataset):
                  loaded_af2_single: bool = False,
                  loaded_af2_pairwise: bool = False,
                  use_lmdb: bool = False,
+                 use_sub_seq: bool = False,
                  ):
         super(GraphMutationDataset, self).__init__()
         if isinstance(data_file, pd.DataFrame):
@@ -104,6 +110,7 @@ class GraphMutationDataset(Dataset):
         self.max_len = max_len
         self.loop = loop
         self.data_augment = data_augment
+        self.use_sub_seq = use_sub_seq
         # initialize some dicts
         self.af2_file_dict = None
         self.af2_coord_dict = None
@@ -115,6 +122,7 @@ class GraphMutationDataset(Dataset):
         self.esm_dict = None
         self.msa_file_dict = None
         self.msa_dict = None
+
         self._check_embedding_files()
         if score_transfer:
             # only do score_transfer when score is 0 or 1
@@ -181,10 +189,13 @@ class GraphMutationDataset(Dataset):
                                                                  self.data['wt.orig'],
                                                                  self.data['sequence.len.orig'],
                                                                  self.data['pos.orig'],
+                                                                 self.data['seq.start'],
+                                                                 self.data['seq.end'],
                                                                  self.data['ref'],
                                                                  self.data['alt'], 
                                                                  cycle([self.max_len]),
-                                                                 self.data['af2_file'] if 'af2_file' in self.data.columns else cycle([None]),))
+                                                                 self.data['af2_file'] if 'af2_file' in self.data.columns else cycle([None]),
+                                                                 cycle([self.use_sub_seq])))
         # drop the data that does not have coordinates if we are using af2
         print(f"drop {np.sum(~np.array(point_mutations, dtype=bool))} mutations that don't have coordinates")
         self.data = self.data.loc[np.array(point_mutations, dtype=bool)]
@@ -224,7 +235,7 @@ class GraphMutationDataset(Dataset):
         self.max_neighbors = max_neighbors
         self.loop = loop
         self.gpu_id = gpu_id
-    
+
     def _load_esm_features(self):
         self.esm_file_dict, mutation_idx = np.unique([mutation.ESM_prefix for mutation in self.mutations],
                                                     return_inverse=True)
@@ -244,7 +255,7 @@ class GraphMutationDataset(Dataset):
             # because the pairwise representation is too large to fit in RAM, we have to select a subset of them
         if self.add_af2_pairwise and self.loaded_af2_pairwise:
             raise ValueError("Not implemented in this version")
-            
+
     def _load_msa_features(self):
         self.msa_file_dict, mutation_idx = np.unique([mutation.uniprot_id for mutation in self.mutations],
                                                      return_inverse=True)
@@ -253,19 +264,19 @@ class GraphMutationDataset(Dataset):
             # msa_dict: msa_seq, conservation, msa
             self.msa_dict = p.starmap(utils.get_msa_dict_from_transcript, zip(self.msa_file_dict))
         print(f'Finished loading {len(self.msa_dict)} msa seqs')
-        
+
     def _set_node_embeddings(self):
         pass
 
     def _set_edge_embeddings(self):
         pass
-    
+
     def get_mask(self, mutation: utils.Mutation):
         return mutation.pos - 1, mutation
 
     def get_graph_and_mask(self, mutation: utils.Mutation):
         # get the ordinary graph
-        coords: np.ndarray = self.af2_coord_dict[mutation.af2_seq_index]  # N, C, O, CA, CB
+        coords: np.ndarray = self.af2_coord_dict[mutation.af2_seq_index]  # N, C, O, CA, C
         if self.computed_graph:
             edge_index = self.af2_graph_dict[mutation.af2_seq_index]  # 2, E
         else:
@@ -335,7 +346,7 @@ class GraphMutationDataset(Dataset):
                                             mutation.seq_start - 1: mutation.seq_end]
             coevo_strength = np.concatenate([coevo_strength, pairwise_rep], axis=2)
         end = time.time()
-        print(f'Finished loading pairwise in {end - start:.2f} seconds')
+        # print(f'Finished loading pairwise in {end - start:.2f} seconds')
         edge_attr = coevo_strength[edge_index[0], edge_index[1], :]
         edge_attr_star = coevo_strength[edge_index_star[0], edge_index_star[1], :]
         # if add positional embedding, add it here
@@ -401,14 +412,16 @@ class GraphMutationDataset(Dataset):
                     msa_seq_check = msa_seq_check[mutation.seq_start - 1: mutation.seq_end]
                     conservation_data = conservation_data[mutation.seq_start - 1: mutation.seq_end]
                 if msa_seq_check != mutation.seq:
-                    # warnings.warn(f'MSA file: {mutation.transcript_id} does not match mutation sequence')
+                    warnings.warn(f"MSA file: {mutation.uniprot_id} does not match mutation sequence")
                     self.unmatched_msa += 1
                     print(f'Unmatched MSA: {self.unmatched_msa}')
+                    print(msa_seq_check)
+                    print(mutation.seq)
                     conservation_data = np.zeros((embed_data.shape[0], 20))
             embed_data = np.concatenate([embed_data, conservation_data], axis=1)
-            to_alt = np.concatenate([to_alt, conservation_data[mask_idx]], axis=1)
+            to_alt = np.concatenate([to_alt, conservation_data[mask_idx].reshape(1, -1)], axis=1)
             if self.alt_type == 'diff':
-                to_ref = np.concatenate([to_ref, conservation_data[mask_idx]], axis=1)
+                to_ref = np.concatenate([to_ref, conservation_data[mask_idx].reshape(1, -1)], axis=1)
         # add pLDDT, if needed
         if self.add_plddt:
             # get plddt
@@ -428,9 +441,9 @@ class GraphMutationDataset(Dataset):
             if self.scale_plddt:
                 plddt_data = plddt_data / 100
             embed_data = np.concatenate([embed_data, plddt_data[:, None]], axis=1)
-            to_alt = np.concatenate([to_alt, plddt_data[mask_idx, None]], axis=1)
+            to_alt = np.concatenate([to_alt, plddt_data[mask_idx, None].reshape(1, -1)], axis=1)
             if self.alt_type == 'diff':
-                to_ref = np.concatenate([to_ref, plddt_data[mask_idx]], axis=1)
+                to_ref = np.concatenate([to_ref, plddt_data[mask_idx].reshape(1, -1)], axis=1)
         # add dssp, if needed
         if self.add_dssp:
             # get dssp
@@ -446,16 +459,16 @@ class GraphMutationDataset(Dataset):
             if len(dssp_data.shape) == 1:
                 dssp_data = dssp_data[:, None]
             embed_data = np.concatenate([embed_data, dssp_data], axis=1)
-            to_alt = np.concatenate([to_alt, dssp_data[mask_idx]], axis=1)
+            to_alt = np.concatenate([to_alt, dssp_data[mask_idx].reshape(1, -1)], axis=1)
             if self.alt_type == 'diff':
-                to_ref = np.concatenate([to_ref, dssp_data[mask_idx]], axis=1)
+                to_ref = np.concatenate([to_ref, dssp_data[mask_idx].reshape(1, -1)], axis=1)
         if self.add_ptm:
             # ptm used to behind msa, moved it here
             ptm_data = utils.get_ptm_from_mutation(mutation, self.ptm_ref)
             embed_data = np.concatenate([embed_data, ptm_data], axis=1)
-            to_alt = np.concatenate([to_alt, ptm_data[mask_idx]], axis=1)
+            to_alt = np.concatenate([to_alt, ptm_data[mask_idx].reshape(1, -1)], axis=1)
             if self.alt_type == 'diff':
-                to_ref = np.concatenate([to_ref, ptm_data[mask_idx]], axis=1)
+                to_ref = np.concatenate([to_ref, ptm_data[mask_idx].reshape(1, -1)], axis=1)
         if self.add_af2_single:
             if self.loaded_af2_single:
                 single_rep = self.af2_single_dict[mutation.af2_rep_index]
@@ -467,9 +480,9 @@ class GraphMutationDataset(Dataset):
             if mutation.crop:
                 single_rep = single_rep[mutation.seq_start - 1: mutation.seq_end]
             embed_data = np.concatenate([embed_data, single_rep], axis=1)
-            to_alt = np.concatenate([to_alt, single_rep[mask_idx]], axis=1)
+            to_alt = np.concatenate([to_alt, single_rep[mask_idx].reshape(1, -1)], axis=1)
             if self.alt_type == 'diff':
-                to_ref = np.concatenate([to_ref, single_rep[mask_idx]], axis=1)
+                to_ref = np.concatenate([to_ref, single_rep[mask_idx].reshape(1, -1)], axis=1)
         if self.add_msa:
             # msa must be the last feature
             if msa_data.shape[0] == 0:
@@ -482,12 +495,14 @@ class GraphMutationDataset(Dataset):
                     msa_data = msa_data[mutation.seq_start - 1: mutation.seq_end]
                 if msa_seq_check != mutation.seq:
                     print(f'Unmatched MSA: {self.unmatched_msa}')
+                    print(msa_seq_check)
+                    print(mutation.seq)
                     msa_data = np.zeros((embed_data.shape[0], 199))
             embed_data = np.concatenate([embed_data, msa_data], axis=1)
             if self.alt_type == 'alt' or self.alt_type == 'zero':
-                to_alt = np.concatenate([to_alt, msa_data[mask_idx]], axis=1)
+                to_alt = np.concatenate([to_alt, msa_data[mask_idx].reshape(1, -1)], axis=1)
             if self.alt_type == 'diff':
-                to_ref = np.concatenate([to_ref, msa_data[mask_idx]], axis=1)
+                to_ref = np.concatenate([to_ref, msa_data[mask_idx].reshape(1, -1)], axis=1)
         # replace the embedding with the mutation, note pos is 1-based
         # but we don't modify the embedding matrix, instead we return a mask matrix
         embed_data_mask = np.ones_like(embed_data)
@@ -633,35 +648,35 @@ class GraphMutationDataset(Dataset):
                 for key in self.hdf5_keys:
                     features[key] = torch.tensor(f[f'{self.hdf5_idx_map[idx]}/{key}'])
             return Data(**features)
-    
+
     def open_lmdb(self):
-         self.env = lmdb.open(self.lmdb_path, subdir=False,
+        self.env = lmdb.open(self.lmdb_path, subdir=False,
                               readonly=True, lock=False,
                               readahead=False, meminit=False)
-         self.txn = self.env.begin(write=False, buffers=True)
-    
+        self.txn = self.env.begin(write=False, buffers=True)
+
     def get_from_lmdb(self, idx):
         if not hasattr(self, 'txn'):
             self.open_lmdb()
         byteflow = self.txn.get(u'{}'.format(self.lmdb_idx_map[idx]).encode('ascii'))
         unpacked = pickle.loads(byteflow)
         return unpacked
-    
+
     def __getitem__(self, idx):
         # record time
         start = time.time()
         if self.get_method == 'default':
             data = self.get(idx)
-            print(f'default Finished loading {idx} in {time.time() - start:.2f} seconds')
+            logger.debug(f'default Finished loading {idx} in {time.time() - start:.2f} seconds')
         elif self.get_method == 'hdf5':
             data = self.get_from_hdf5(idx)
-            print(f'hdf5 Finished loading {idx} in {time.time() - start:.2f} seconds')
+            logger.debug(f'hdf5 Finished loading {idx} in {time.time() - start:.2f} seconds')
         elif self.get_method == 'lmdb':
             data = self.get_from_lmdb(idx)
-            print(f'lmdb Finished loading {idx} in {time.time() - start:.2f} seconds')
+            logger.debug(f'lmdb Finished loading {idx} in {time.time() - start:.2f} seconds')
         elif self.get_method == 'memory':
             data = self.parsed_data[idx]
-            print(f'memory Finished loading {idx} in {time.time() - start:.2f} seconds')
+            logger.debug(f"memory Finished loading {idx} in {time.time() - start:.2f} seconds")
         return data
 
     def __len__(self):
@@ -669,7 +684,7 @@ class GraphMutationDataset(Dataset):
 
     def len(self) -> int:
         return len(self.mutations)
-    
+
     def subset(self, idxs):
         self.data = self.data.iloc[idxs].reset_index(drop=True)
         self.mutations = list(map(self.mutations.__getitem__, idxs))
@@ -748,8 +763,8 @@ class GraphMutationDataset(Dataset):
                 return np.array([benign, patho])
         else:
             return np.array([0, 0])
-    
-    # create a hdf5 file for the dataset, for faster loading        
+
+    # create a hdf5 file for the dataset, for faster loading
     def create_hdf5(self):
         hdf5_file = self.data_file.replace('.csv', f'.{datetime.now()}.hdf5')
         self.hdf5_file = hdf5_file
@@ -766,7 +781,7 @@ class GraphMutationDataset(Dataset):
                 for key in features.keys():
                     f.create_dataset(f'{i}/{key}', data=features[key])
         return
-    
+
     # create a lmdb file for the dataset, for faster loading
     def create_lmdb(self, write_frequency=1000):
         lmdb_path = self.data_file.replace('.csv', f'.{datetime.now()}.lmdb')
@@ -2937,110 +2952,110 @@ class FullGraphMultiOnesiteMutationDataset(FullGraphMutationDataset):
 
 
 # Not used in this version
-def collate(
-    data_list: List[BaseData],
-    increment: bool = True,
-    add_batch: bool = True,
-) -> BaseData:
-    # Collates a list of `data` objects into a single object of type `cls`.
-    # `collate` can handle both homogeneous and heterogeneous data objects by
-    # individually collating all their stores.
-    # In addition, `collate` can handle nested data structures such as
-    # dictionaries and lists.
+# def collate(
+#     data_list: List[BaseData],
+#     increment: bool = True,
+#     add_batch: bool = True,
+# ) -> BaseData:
+#     # Collates a list of `data` objects into a single object of type `cls`.
+#     # `collate` can handle both homogeneous and heterogeneous data objects by
+#     # individually collating all their stores.
+#     # In addition, `collate` can handle nested data structures such as
+#     # dictionaries and lists.
 
-    if not isinstance(data_list, (list, tuple)):
-        # Materialize `data_list` to keep the `_parent` weakref alive.
-        data_list = list(data_list)
+#     if not isinstance(data_list, (list, tuple)):
+#         # Materialize `data_list` to keep the `_parent` weakref alive.
+#         data_list = list(data_list)
 
-    if cls != data_list[0].__class__:
-        out = cls(_base_cls=data_list[0].__class__)  # Dynamic inheritance.
-    else:
-        out = cls()
+#     if cls != data_list[0].__class__:
+#         out = cls(_base_cls=data_list[0].__class__)  # Dynamic inheritance.
+#     else:
+#         out = cls()
 
-    # Create empty stores:
-    out.stores_as(data_list[0])
+#     # Create empty stores:
+#     out.stores_as(data_list[0])
 
-    follow_batch = set(follow_batch or [])
-    exclude_keys = set(exclude_keys or [])
+#     follow_batch = set(follow_batch or [])
+#     exclude_keys = set(exclude_keys or [])
 
-    # Group all storage objects of every data object in the `data_list` by key,
-    # i.e. `key_to_store_list = { key: [store_1, store_2, ...], ... }`:
-    key_to_stores = defaultdict(list)
-    for data in data_list:
-        for store in data.stores:
-            key_to_stores[store._key].append(store)
+#     # Group all storage objects of every data object in the `data_list` by key,
+#     # i.e. `key_to_store_list = { key: [store_1, store_2, ...], ... }`:
+#     key_to_stores = defaultdict(list)
+#     for data in data_list:
+#         for store in data.stores:
+#             key_to_stores[store._key].append(store)
 
-    # With this, we iterate over each list of storage objects and recursively
-    # collate all its attributes into a unified representation:
+#     # With this, we iterate over each list of storage objects and recursively
+#     # collate all its attributes into a unified representation:
 
-    # We maintain two additional dictionaries:
-    # * `slice_dict` stores a compressed index representation of each attribute
-    #    and is needed to re-construct individual elements from mini-batches.
-    # * `inc_dict` stores how individual elements need to be incremented, e.g.,
-    #   `edge_index` is incremented by the cumulated sum of previous elements.
-    #   We also need to make use of `inc_dict` when re-constructuing individual
-    #   elements as attributes that got incremented need to be decremented
-    #   while separating to obtain original values.
-    device = None
-    slice_dict, inc_dict = defaultdict(dict), defaultdict(dict)
-    for out_store in out.stores:
-        key = out_store._key
-        stores = key_to_stores[key]
-        for attr in stores[0].keys():
+#     # We maintain two additional dictionaries:
+#     # * `slice_dict` stores a compressed index representation of each attribute
+#     #    and is needed to re-construct individual elements from mini-batches.
+#     # * `inc_dict` stores how individual elements need to be incremented, e.g.,
+#     #   `edge_index` is incremented by the cumulated sum of previous elements.
+#     #   We also need to make use of `inc_dict` when re-constructuing individual
+#     #   elements as attributes that got incremented need to be decremented
+#     #   while separating to obtain original values.
+#     device = None
+#     slice_dict, inc_dict = defaultdict(dict), defaultdict(dict)
+#     for out_store in out.stores:
+#         key = out_store._key
+#         stores = key_to_stores[key]
+#         for attr in stores[0].keys():
 
-            if attr in exclude_keys:  # Do not include top-level attribute.
-                continue
+#             if attr in exclude_keys:  # Do not include top-level attribute.
+#                 continue
 
-            values = [store[attr] for store in stores]
+#             values = [store[attr] for store in stores]
 
-            # The `num_nodes` attribute needs special treatment, as we need to
-            # sum their values up instead of merging them to a list:
-            if attr == 'num_nodes':
-                out_store._num_nodes = values
-                out_store.num_nodes = sum(values)
-                continue
+#             # The `num_nodes` attribute needs special treatment, as we need to
+#             # sum their values up instead of merging them to a list:
+#             if attr == 'num_nodes':
+#                 out_store._num_nodes = values
+#                 out_store.num_nodes = sum(values)
+#                 continue
 
-            # Skip batching of `ptr` vectors for now:
-            if attr == 'ptr':
-                continue
+#             # Skip batching of `ptr` vectors for now:
+#             if attr == 'ptr':
+#                 continue
 
-            # Collate attributes into a unified representation:
-            value, slices, incs = _collate(attr, values, data_list, stores,
-                                           increment)
+#             # Collate attributes into a unified representation:
+#             value, slices, incs = _collate(attr, values, data_list, stores,
+#                                            increment)
 
-            if isinstance(value, Tensor) and value.is_cuda:
-                device = value.device
+#             if isinstance(value, Tensor) and value.is_cuda:
+#                 device = value.device
 
-            out_store[attr] = value
-            if key is not None:
-                slice_dict[key][attr] = slices
-                inc_dict[key][attr] = incs
-            else:
-                slice_dict[attr] = slices
-                inc_dict[attr] = incs
+#             out_store[attr] = value
+#             if key is not None:
+#                 slice_dict[key][attr] = slices
+#                 inc_dict[key][attr] = incs
+#             else:
+#                 slice_dict[attr] = slices
+#                 inc_dict[attr] = incs
 
-            # Add an additional batch vector for the given attribute:
-            if attr in follow_batch:
-                batch, ptr = _batch_and_ptr(slices, device)
-                out_store[f'{attr}_batch'] = batch
-                out_store[f'{attr}_ptr'] = ptr
+#             # Add an additional batch vector for the given attribute:
+#             if attr in follow_batch:
+#                 batch, ptr = _batch_and_ptr(slices, device)
+#                 out_store[f'{attr}_batch'] = batch
+#                 out_store[f'{attr}_ptr'] = ptr
 
-        # In case the storage holds node, we add a top-level batch vector it:
-        if (add_batch and isinstance(stores[0], NodeStorage)
-                and stores[0].can_infer_num_nodes):
-            repeats = [store.num_nodes for store in stores]
-            out_store.batch = repeat_interleave(repeats, device=device)
-            out_store.ptr = cumsum(torch.tensor(repeats, device=device))
+#         # In case the storage holds node, we add a top-level batch vector it:
+#         if (add_batch and isinstance(stores[0], NodeStorage)
+#                 and stores[0].can_infer_num_nodes):
+#             repeats = [store.num_nodes for store in stores]
+#             out_store.batch = repeat_interleave(repeats, device=device)
+#             out_store.ptr = cumsum(torch.tensor(repeats, device=device))
 
-    return out
+#     return out
 
 
-def my_collate_fn(data_list: List[Any]) -> Any:
-    batch = collate(
-            data_list=data_list,
-            increment=True,
-            add_batch=True,
-        )
+# def my_collate_fn(data_list: List[Any]) -> Any:
+#     batch = collate(
+#             data_list=data_list,
+#             increment=True,
+#             add_batch=True,
+#         )
 
-    batch._num_graphs = len(data_list)
-    return batch
+#     batch._num_graphs = len(data_list)
+#     return batch
