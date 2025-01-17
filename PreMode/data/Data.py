@@ -51,6 +51,7 @@ class GraphMutationDataset(Dataset):
                  use_cb: bool = False,
                  add_msa_contacts: bool = True,
                  add_dssp: bool = False,
+                 dssp_bin: str = None,
                  add_msa: bool = False,
                  add_confidence: bool = False,
                  loaded_confidence: bool = False,
@@ -111,6 +112,7 @@ class GraphMutationDataset(Dataset):
         self.loop = loop
         self.data_augment = data_augment
         self.use_sub_seq = use_sub_seq
+        self.dssp_bin = dssp_bin
         # initialize some dicts
         self.af2_file_dict = None
         self.af2_coord_dict = None
@@ -213,7 +215,7 @@ class GraphMutationDataset(Dataset):
             print(f'Finished loading plddt')
             self.af2_confidence_dict = p.starmap(utils.get_confidence_from_af2file, zip(self.af2_file_dict, self.af2_plddt_dict)) if self.add_plddt and self.add_confidence and self.loaded_confidence else None
             print(f'Finished loading confidence')
-            self.af2_dssp_dict = p.starmap(utils.get_dssp_from_af2, zip(self.af2_file_dict)) if self.add_dssp else None
+            self.af2_dssp_dict = p.starmap(utils.get_dssp_from_af2, zip(self.af2_file_dict, cycle([self.dssp_bin]))) if self.add_dssp else None
             print(f'Finished loading dssp')
         if self.computed_graph:
             if self.graph_type == 'af2':
@@ -1054,7 +1056,7 @@ class FullGraphMutationDataset(TorchDataset):
             print(f'Finished loading plddt')
             self.af2_confidence_dict = p.starmap(utils.get_confidence_from_af2file, zip(self.af2_file_dict, self.af2_plddt_dict)) if self.add_plddt and self.add_confidence and self.loaded_confidence else None
             print(f'Finished loading confidence')
-            self.af2_dssp_dict = p.starmap(utils.get_dssp_from_af2, zip(self.af2_file_dict)) if self.add_dssp else None
+            self.af2_dssp_dict = p.starmap(utils.get_dssp_from_af2, zip(self.af2_file_dict, cycle([self.dssp_bin]))) if self.add_dssp else None
             print(f'Finished loading dssp')
         self.radius = radius
         self.max_neighbors = max_neighbors

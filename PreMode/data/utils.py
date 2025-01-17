@@ -38,6 +38,9 @@ PAE_DATA_PATH = "NA"
 # TODO: update the path
 MSA_ATTN_DATA_PATH = "./data.files/esm.MSA/"
 NUM_THREADS = 42
+# tmp file path
+TMP_FILE_PATH = "./data.files/tmp/"
+os.system(f"mkdir -p {TMP_FILE_PATH}")
 # prepare esm2 embeddings
 with open(f"./utils/LANGUAGE_MODEL.{ESM_MODEL_SIZE}.pkl", "rb") as f:
     LANGUAGE_MODEL = pickle.load(f)
@@ -649,7 +652,7 @@ def get_plddt_from_af2(af2_file):
     return plddt
 
 
-def get_dssp_from_af2(af2_file):
+def get_dssp_from_af2(af2_file, dssp_bin):
     p = PDBParser()
     with gzip.open(af2_file, "rt") as f:
         structure = p.get_structure("", f)
@@ -658,14 +661,10 @@ def get_dssp_from_af2(af2_file):
     #     dssp = DSSP(model, af2_file, file_type="PDB", dssp="/usr/bin/dssp")
     # except Exception or UserWarning:
     random.seed(hash(af2_file))
-    tmpfile = (
-        "/nfs/user/Users/dl3738/PremodeModify/feature/tmp/"
-        + "".join(random.choices(string.ascii_letters, k=5))
-        + ".pdb"
-    )
+    tmpfile = TMP_FILE_PATH + "".join(random.choices(string.ascii_letters, k=5)) + ".pdb"
     with open(tmpfile, "w") as f:
         f.write(gzip.open(af2_file, "rt").read())
-    dssp = DSSP(model, tmpfile, file_type="PDB", dssp="/home/dl3738/soft/miniforge3/envs/PreMode/bin/mkdssp")
+    dssp = DSSP(model, tmpfile, file_type="PDB", dssp=dssp_bin)
     os.remove(tmpfile)
     # keys in dssp: index, aa, secondary struc, rsa, phi, psi, N-H-->O, O-->H-N, N-H-->O, O-->H-N
     dssp = pd.DataFrame(dssp)

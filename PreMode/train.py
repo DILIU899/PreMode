@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sys
 import pickle
 import random
 import subprocess
@@ -25,6 +26,7 @@ from model.trainer import (
 )
 from utils.configs import LoadFromFile, save_argparse
 
+CONDA_PREFIX = os.getenv("CONDA_PREFIX", sys.prefix)
 
 def get_args():
     parser = argparse.ArgumentParser(description="Training")
@@ -59,6 +61,7 @@ def get_args():
     parser.add_argument("--scale-plddt", type=bool, default=False, help="Whether to scale plddt or not")
     parser.add_argument("--add-conservation", type=bool, default=False, help="Whether to add conservation or not")
     parser.add_argument("--add-dssp", type=bool, default=False, help="Whether to add dssp or not")
+    parser.add_argument("--dssp-bin", type=str, default=f"{CONDA_PREFIX}/bin/mkdssp", help="Path to the DSSP executable software")
     parser.add_argument(
         "--add-position", type=bool, default=False, help="Whether to add positional wise encoding or not"
     )
@@ -381,6 +384,7 @@ def main(args, continue_train=False, four_fold=False):
         "max_len": args.max_len,
         "use_lmdb": args.use_lmdb,
         "use_sub_seq": args.use_sub_seq,
+        "dssp_bin": args.dssp_bin,
     }
     if "Onesite" in args.dataset:
         dataset_att["convert_to_onesite"] = args.convert_to_onesite
