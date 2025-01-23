@@ -2,11 +2,12 @@
 log/**
 
 # ignore all input data files (it's too big, so need to download from huggingface)
-data.files
-data.files/**
+PreMode/data.files
+PreMode/data.files/**
 parse_input_table/swissprot_and_human.full.seq.csv
 
 # ignore all result files
+res
 res/**
 
 # ignore experiment model config files

@@ -39,6 +39,8 @@ Can be chosen from
 
 which gpu to use (only useful in single gpu training, if multigpu, then start from gpu 0)
 
+also specifying the gpu when testing
+
 # arguments from config file
 
 ## output_model
@@ -108,3 +110,6 @@ used for mandatory use of the seq start and seq end in the data file and crop th
 
 If > 1, train on multiple gpus and do not need to specify the gpu-id
 
+## num_save_batches
+
+save every X batches, this also control the validation frequency

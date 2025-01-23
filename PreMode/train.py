@@ -714,6 +714,7 @@ def _test(args):
 
         pl.seed_everything(args.seed)
     else:
+        import numpy as np
         random.seed(args.seed)
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -755,6 +756,8 @@ def _test(args):
         "computed_graph": args.computed_graph,
         "neighbor_type": args.neighbor_type,
         "max_len": args.max_len,
+        "use_sub_seq": args.use_sub_seq,
+        "dssp_bin": args.dssp_bin,
     }
     if args.trainer_fn == "PreMode_trainer":
         trainer_fn = PreMode_trainer
@@ -782,7 +785,7 @@ def _test(args):
                 test_result_dict, test_result_df = _test_one_epoch(trainer)
                 with open(os.path.join(args.log_dir, f"test_result.epoch.{epoch}.txt"), "w") as f:
                     f.write(str(test_result_dict))
-                test_result_df.to_csv(os.path.join(args.log_dir, f"test_result.epoch.{epoch}.csv"), index=False)
+                test_result_df.to_csv(os.path.join(args.log_dir, f"test_result.epoch.{epoch}.csv"))
             else:
                 print(f"model for epoch {epoch} not exist")
 
@@ -811,7 +814,7 @@ def _test(args):
                 test_result_dict, test_result_df = _test_one_epoch(trainer)
                 with open(os.path.join(args.log_dir, f"test_result.step.{step}.txt"), "w") as f:
                     f.write(str(test_result_dict))
-                test_result_df.to_csv(os.path.join(args.log_dir, f"test_result.step.{step}.csv"), index=False)
+                test_result_df.to_csv(os.path.join(args.log_dir, f"test_result.step.{step}.csv"))
             else:
                 print(f"model for step {step} not exists")
                 continue
