@@ -16,7 +16,7 @@ scripts/**
 !scripts/example/**
 !scripts/*.sh
 
-# ignore __pycache__
+# ignore system files
 **/__pycache__
 **/.vscode
-
+**/.ipynb_checkpoints
