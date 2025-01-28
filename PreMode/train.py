@@ -1,20 +1,19 @@
 import argparse
 import json
 import os
-import sys
 import pickle
 import random
 import subprocess
+import sys
 from functools import partial
 from types import SimpleNamespace as sn
 
+import data
 import numpy as np
 import pandas as pd
 import torch
 import torch.multiprocessing as mp
 from captum.attr import IntegratedGradients
-
-import data
 from model import model
 from model.model import create_model, create_model_and_load
 from model.trainer import (
@@ -27,6 +26,7 @@ from model.trainer import (
 from utils.configs import LoadFromFile, save_argparse
 
 CONDA_PREFIX = os.getenv("CONDA_PREFIX", sys.prefix)
+
 
 def get_args():
     parser = argparse.ArgumentParser(description="Training")
@@ -61,7 +61,9 @@ def get_args():
     parser.add_argument("--scale-plddt", type=bool, default=False, help="Whether to scale plddt or not")
     parser.add_argument("--add-conservation", type=bool, default=False, help="Whether to add conservation or not")
     parser.add_argument("--add-dssp", type=bool, default=False, help="Whether to add dssp or not")
-    parser.add_argument("--dssp-bin", type=str, default=f"{CONDA_PREFIX}/bin/mkdssp", help="Path to the DSSP executable software")
+    parser.add_argument(
+        "--dssp-bin", type=str, default=f"{CONDA_PREFIX}/bin/mkdssp", help="Path to the DSSP executable software"
+    )
     parser.add_argument(
         "--add-position", type=bool, default=False, help="Whether to add positional wise encoding or not"
     )
@@ -715,6 +717,7 @@ def _test(args):
         pl.seed_everything(args.seed)
     else:
         import numpy as np
+
         random.seed(args.seed)
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -1525,6 +1528,9 @@ if __name__ == "__main__":
         adaptive_main(_args)
     elif _args.mode == "continue_train":
         main(_args, continue_train=True)
+    elif _args.mode == "continue_train_and_test":
+        main(_args, continue_train=True)
+        _test(_args)
     elif _args.mode == "test":
         _test(_args)
     elif _args.mode == "train_and_test":
